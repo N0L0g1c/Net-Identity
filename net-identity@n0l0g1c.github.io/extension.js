@@ -472,7 +472,13 @@ export default class NetIdentityExtension extends Extension {
      * @param {string} role
      * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
      */
-    _addToPanel(role, indicator) {
+    /**
+     * @param {string} role
+     * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
+     * @param {number} [position]
+     * @param {'left'|'center'|'right'} [box] center = near the clock
+     */
+    _addToPanel(role, indicator, position = 0, box = 'center') {
         const existing = Main.panel.statusArea[role];
         if (existing) {
             try {
@@ -483,12 +489,13 @@ export default class NetIdentityExtension extends Extension {
             if (Main.panel.statusArea[role])
                 delete Main.panel.statusArea[role];
         }
-        Main.panel.addToStatusArea(role, indicator);
+        // position 0 in center places the indicator to the left of the clock
+        Main.panel.addToStatusArea(role, indicator, position, box);
     }
 
     enable() {
         this._indicator = new NetIdentityIndicator();
-        this._addToPanel(this.uuid, this._indicator);
+        this._addToPanel(this.uuid, this._indicator, 0, 'center');
         this._indicator.start().catch(e => logError(e));
     }
 
