@@ -468,9 +468,26 @@ class NetIdentityIndicator extends PanelMenu.Button {
 }
 
 export default class NetIdentityExtension extends Extension {
+    /**
+     * @param {string} role
+     * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
+     */
+    _addToPanel(role, indicator) {
+        try {
+            Main.panel.addToStatusArea(role, indicator);
+        } catch {
+            try {
+                Main.panel.statusArea[role]?.destroy();
+            } catch {
+                // ignore
+            }
+            Main.panel.addToStatusArea(role, indicator);
+        }
+    }
+
     enable() {
         this._indicator = new NetIdentityIndicator();
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
+        this._addToPanel(this.uuid, this._indicator);
         this._indicator.start().catch(e => logError(e));
     }
 
