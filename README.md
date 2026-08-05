@@ -2,6 +2,8 @@
 
 GNOME Shell extension: top-panel **network identity** indicator (public IP, VPN/WireGuard/Tailscale, DNS, LAN).
 
+![Screenshot](screenshots/screenshot.png)
+
 ## Features
 
 - Public IP in the panel (auto-refresh every 5 minutes)
@@ -18,7 +20,7 @@ GNOME Shell extension: top-panel **network identity** indicator (public IP, VPN/
 - NetworkManager
 - Network access for optional public-IP lookup
 
-## Install (local)
+## Install
 
 ```bash
 UUID=net-identity@n0l0g1c.github.io
@@ -27,7 +29,7 @@ cp -a "$UUID" ~/.local/share/gnome-shell/extensions/
 gnome-extensions enable "$UUID"
 ```
 
-On Wayland, log out and back in so the shell discovers a newly copied UUID, then enable it.
+Log out/in on Wayland (or restart GNOME Shell) so the extension is discovered.
 
 ## Network use
 
@@ -39,33 +41,30 @@ When refreshing the public IP, the extension may contact one of:
 
 Responses are kept in memory for the session only. Local identity data comes from NetworkManager and `/etc/resolv.conf`. No accounts and no telemetry.
 
-## Publish to extensions.gnome.org
+## Screenshots
 
-Follows the [EGO review guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html):
-
-| Requirement | How this extension complies |
+| File | Contents |
 |---|---|
-| GPL-compatible license | GPL-2.0-or-later (`LICENSE`) |
-| Lifecycle | Signals, Soup session, and timeouts cleaned up in `disable()` |
-| Network disclosure | Declared in `metadata.json` description |
-| No telemetry | IP echo only; nothing else leaves the machine |
-| Zip contents | Runtime files only (`./pack.sh`) |
+| [`screenshots/screenshot.png`](screenshots/screenshot.png) | Primary store image — VPN up |
+| [`screenshots/screenshot-no-vpn.png`](screenshots/screenshot-no-vpn.png) | Public network, VPN down |
+| [`screenshots/icon.png`](screenshots/icon.png) | Optional icon asset |
 
-### Package for upload
+## Packaging
 
 ```bash
 ./pack.sh
-# produces: net-identity@n0l0g1c.github.io.shell-extension.zip
+# → net-identity@n0l0g1c.github.io.shell-extension.zip
 ```
 
-Upload the zip at [extensions.gnome.org](https://extensions.gnome.org/). The zip root must contain `metadata.json`.
+Zip contents: `metadata.json`, `extension.js`, `stylesheet.css`, `LICENSE`.
+
+This project follows the [GNOME Shell extension review guidelines](https://gjs.guide/extensions/review-guidelines/review-guidelines.html) (lifecycle cleanup, GPL-2.0-or-later, network use disclosed in metadata, no telemetry).
 
 ## Development
 
 ```bash
 cp -a net-identity@n0l0g1c.github.io \
   ~/.local/share/gnome-shell/extensions/
-# Wayland: re-login after first install
 journalctl -f /usr/bin/gnome-shell
 ```
 
