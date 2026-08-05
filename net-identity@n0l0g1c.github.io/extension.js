@@ -192,11 +192,11 @@ class NetIdentityIndicator extends PanelMenu.Button {
 
     destroy() {
         if (this._ipSource) {
-            GLib.Source.remove(this._ipSource);
+            try { GLib.Source.remove(this._ipSource); } catch { /* already removed */ }
             this._ipSource = 0;
         }
         if (this._localSource) {
-            GLib.Source.remove(this._localSource);
+            try { GLib.Source.remove(this._localSource); } catch { /* already removed */ }
             this._localSource = 0;
         }
         if (this._cancellable) {
@@ -473,16 +473,17 @@ export default class NetIdentityExtension extends Extension {
      * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
      */
     _addToPanel(role, indicator) {
-        try {
-            Main.panel.addToStatusArea(role, indicator);
-        } catch {
+        const existing = Main.panel.statusArea[role];
+        if (existing) {
             try {
-                Main.panel.statusArea[role]?.destroy();
+                existing.destroy();
             } catch {
                 // ignore
             }
-            Main.panel.addToStatusArea(role, indicator);
+            if (Main.panel.statusArea[role])
+                delete Main.panel.statusArea[role];
         }
+        Main.panel.addToStatusArea(role, indicator);
     }
 
     enable() {
