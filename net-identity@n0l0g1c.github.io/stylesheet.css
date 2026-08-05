@@ -1,0 +1,54 @@
+/* Net Identity — SPDX-License-Identifier: GPL-2.0-or-later */
+
+.ni-panel-label {
+    font-weight: 600;
+    margin: 0 2px;
+    font-feature-settings: "tnum";
+    max-width: 14em;
+}
+
+.ni-ok {
+    color: #2ec27e;
+}
+
+.ni-warn {
+    color: #e5a50a;
+}
+
+.ni-danger {
+    color: #e01b24;
+    font-weight: 700;
+}
+
+.ni-row {
+    min-width: 320px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+}
+
+.ni-key {
+    font-weight: 600;
+    min-width: 6.5em;
+    margin-right: 10px;
+    opacity: 0.85;
+}
+
+.ni-val {
+    font-feature-settings: "tnum";
+    font-family: monospace;
+}
+
+.ni-status {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.ni-hint {
+    font-size: 0.85em;
+    opacity: 0.65;
+    font-style: italic;
+}
+
+.ni-scroll {
+    max-height: 360px;
+}
