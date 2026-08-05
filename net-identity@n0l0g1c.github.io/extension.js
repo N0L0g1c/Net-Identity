@@ -16,6 +16,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async', 'send_and_read_finish');
+Gio._promisify(Gio.File.prototype, 'load_contents_async', 'load_contents_finish');
 
 const IP_POLL_MS = 5 * 60 * 1000;
 const LOCAL_POLL_MS = 3 * 1000;
@@ -26,11 +27,6 @@ const IP_URLS = [
 ];
 const USER_AGENT = 'net-identity@n0l0g1c.github.io/1.0';
 
-/**
- * @param {string} key
- * @param {string} value
- * @param {string} [style]
- */
 class StatusRow extends PopupMenu.PopupBaseMenuItem {
     static {
         GObject.registerClass(this);
@@ -68,10 +64,6 @@ class StatusRow extends PopupMenu.PopupBaseMenuItem {
         });
     }
 
-    /**
-     * @param {string} text
-     * @param {string} [style]
-     */
     setValue(text, style = '') {
         this._val.text = text;
         this._val.style_class = `ni-val ${style}`.trim();
@@ -117,6 +109,7 @@ class NetIdentityIndicator extends PanelMenu.Button {
         this._cancellable = null;
         this._ipSource = 0;
         this._localSource = 0;
+        this._menuOpenId = 0;
 
         this._ipRow = new StatusRow('Public IP', '…');
         this._vpnRow = new StatusRow('VPN / WG', '…');
@@ -154,9 +147,9 @@ class NetIdentityIndicator extends PanelMenu.Button {
         hint.label.add_style_class_name('ni-hint');
         this.menu.addMenuItem(hint);
 
-        this.menu.connect('open-state-changed', (_m, open) => {
+        this._menuOpenId = this.menu.connect('open-state-changed', (_m, open) => {
             if (open)
-                this._refreshLocal();
+                this._refreshLocal().catch(e => logError(e));
         });
     }
 
@@ -164,20 +157,20 @@ class NetIdentityIndicator extends PanelMenu.Button {
         try {
             this._nmClient = await NM.Client.new_async(null);
             this._nmSignalIds.push(
-                this._nmClient.connect('notify::active-connections', () => this._refreshLocal())
+                this._nmClient.connect('notify::active-connections', () => this._refreshLocal().catch(e => logError(e)))
             );
             this._nmSignalIds.push(
-                this._nmClient.connect('device-added', () => this._refreshLocal())
+                this._nmClient.connect('device-added', () => this._refreshLocal().catch(e => logError(e)))
             );
             this._nmSignalIds.push(
-                this._nmClient.connect('device-removed', () => this._refreshLocal())
+                this._nmClient.connect('device-removed', () => this._refreshLocal().catch(e => logError(e)))
             );
         } catch (e) {
             logError(e, 'Net Identity: NetworkManager unavailable');
             this._statusItem.label.text = 'NetworkManager unavailable';
         }
 
-        this._refreshLocal();
+        this._refreshLocal().catch(e => logError(e));
         this._fetchPublicIp(false).catch(e => logError(e));
 
         this._ipSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, IP_POLL_MS, () => {
@@ -185,18 +178,30 @@ class NetIdentityIndicator extends PanelMenu.Button {
             return GLib.SOURCE_CONTINUE;
         });
         this._localSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LOCAL_POLL_MS, () => {
-            this._refreshLocal();
+            this._refreshLocal().catch(e => logError(e));
             return GLib.SOURCE_CONTINUE;
         });
     }
 
     destroy() {
+        if (this._menuOpenId) {
+            this.menu.disconnect(this._menuOpenId);
+            this._menuOpenId = 0;
+        }
         if (this._ipSource) {
-            try { GLib.Source.remove(this._ipSource); } catch { /* already removed */ }
+            try {
+                GLib.Source.remove(this._ipSource);
+            } catch {
+                // already gone
+            }
             this._ipSource = 0;
         }
         if (this._localSource) {
-            try { GLib.Source.remove(this._localSource); } catch { /* already removed */ }
+            try {
+                GLib.Source.remove(this._localSource);
+            } catch {
+                // already gone
+            }
             this._localSource = 0;
         }
         if (this._cancellable) {
@@ -208,15 +213,15 @@ class NetIdentityIndicator extends PanelMenu.Button {
                 this._nmClient.disconnect(id);
             this._nmSignalIds = [];
         }
-        this._session = null;
+        if (this._session) {
+            this._session.abort();
+            this._session = null;
+        }
         this._nmClient = null;
         super.destroy();
     }
 
-    /**
-     * @returns {{vpn: boolean, names: string[], tailscale: boolean, lan: string[], dns: string[], primary: string}}
-     */
-    _collectNm() {
+    async _collectNm() {
         const result = {
             vpn: false,
             names: [],
@@ -268,7 +273,7 @@ class NetIdentityIndicator extends PanelMenu.Button {
                     }
                 }
             } catch {
-                // ignore per-connection IP parse errors
+                // skip broken connection entries
             }
         }
 
@@ -302,23 +307,19 @@ class NetIdentityIndicator extends PanelMenu.Button {
             }
         }
 
-        // resolv.conf fallback for DNS
         if (result.dns.length === 0)
-            result.dns = this._readResolvConf();
+            result.dns = await this._readResolvConf();
 
         return result;
     }
 
-    /**
-     * @returns {string[]}
-     */
-    _readResolvConf() {
+    async _readResolvConf() {
         const dns = [];
         try {
             const file = Gio.File.new_for_path('/etc/resolv.conf');
             if (!file.query_exists(null))
                 return dns;
-            const [, bytes] = file.load_contents(null);
+            const [, bytes] = await file.load_contents_async(null);
             const text = new TextDecoder().decode(bytes);
             for (const line of text.split('\n')) {
                 const m = line.match(/^\s*nameserver\s+(\S+)/);
@@ -331,8 +332,8 @@ class NetIdentityIndicator extends PanelMenu.Button {
         return dns;
     }
 
-    _refreshLocal() {
-        const info = this._collectNm();
+    async _refreshLocal() {
+        const info = await this._collectNm();
 
         if (info.vpn) {
             this._vpnRow.setValue(
@@ -361,9 +362,6 @@ class NetIdentityIndicator extends PanelMenu.Button {
         this._updatePanel(info);
     }
 
-    /**
-     * @param {{vpn: boolean, tailscale: boolean}} info
-     */
     _updatePanel(info) {
         const ip = this._publicIp || '…';
         const shortIp = ip.length > 15 ? `${ip.slice(0, 12)}…` : ip;
@@ -386,9 +384,6 @@ class NetIdentityIndicator extends PanelMenu.Button {
         }
     }
 
-    /**
-     * @param {boolean} force
-     */
     async _fetchPublicIp(force) {
         if (this._fetchingIp)
             return;
@@ -419,7 +414,7 @@ class NetIdentityIndicator extends PanelMenu.Button {
                 this._ipRow.setValue(ip, 'ni-danger');
             }
 
-            this._refreshLocal();
+            this._refreshLocal().catch(err => logError(err));
         } catch (e) {
             const cancelled = e instanceof GLib.Error &&
                 e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
@@ -435,10 +430,6 @@ class NetIdentityIndicator extends PanelMenu.Button {
         }
     }
 
-    /**
-     * @param {Gio.Cancellable|null} cancellable
-     * @returns {Promise<string>}
-     */
     async _downloadIp(cancellable) {
         let lastError = null;
         for (const url of IP_URLS) {
@@ -455,7 +446,6 @@ class NetIdentityIndicator extends PanelMenu.Button {
                 if (status < 200 || status >= 300)
                     throw new Error(`HTTP ${status}`);
                 const text = new TextDecoder().decode(bytes.get_data()).trim();
-                // IPv4 or IPv6-ish
                 if (!/^[\d.:a-fA-F]+$/.test(text) || text.length > 45)
                     throw new Error('Unexpected IP payload');
                 return text;
@@ -468,16 +458,6 @@ class NetIdentityIndicator extends PanelMenu.Button {
 }
 
 export default class NetIdentityExtension extends Extension {
-    /**
-     * @param {string} role
-     * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
-     */
-    /**
-     * @param {string} role
-     * @param {import('resource:///org/gnome/shell/ui/panelMenu.js').Button} indicator
-     * @param {number} [position]
-     * @param {'left'|'center'|'right'} [box] center = near the clock
-     */
     _addToPanel(role, indicator, position = 0, box = 'right') {
         const existing = Main.panel.statusArea[role];
         if (existing) {

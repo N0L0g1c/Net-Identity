@@ -1,7 +1,7 @@
 {
   "uuid": "net-identity@n0l0g1c.github.io",
   "name": "Net Identity",
-  "description": "Panel indicator for your current network identity: public IP address, VPN/WireGuard/Tailscale state, DNS resolvers, primary connection, and LAN addresses. Click a row to copy its value. Notifies when the public IP changes.\n\nNetwork access: this extension may request your public IP from api.ipify.org, ifconfig.me, or icanhazip.com. Responses are kept in memory only for the session. Local connection details come from NetworkManager and /etc/resolv.conf. No accounts and no telemetry.",
+  "description": "Panel indicator for your current network identity: public IP address, VPN/WireGuard/Tailscale state, DNS resolvers, primary connection, and LAN addresses. Click a row to copy its value to the clipboard (write-only; this extension does not read the clipboard). Notifies when the public IP changes.\n\nNetwork access: this extension may request your public IP from api.ipify.org, ifconfig.me, or icanhazip.com. Responses are kept in memory only for the session. Local connection details come from NetworkManager and /etc/resolv.conf. No accounts and no telemetry.",
   "shell-version": [
     "45",
     "46",
