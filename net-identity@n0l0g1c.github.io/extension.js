@@ -189,19 +189,11 @@ class NetIdentityIndicator extends PanelMenu.Button {
             this._menuOpenId = 0;
         }
         if (this._ipSource) {
-            try {
-                GLib.Source.remove(this._ipSource);
-            } catch {
-                // already gone
-            }
+            GLib.Source.remove(this._ipSource);
             this._ipSource = 0;
         }
         if (this._localSource) {
-            try {
-                GLib.Source.remove(this._localSource);
-            } catch {
-                // already gone
-            }
+            GLib.Source.remove(this._localSource);
             this._localSource = 0;
         }
         if (this._cancellable) {
@@ -233,19 +225,17 @@ class NetIdentityIndicator extends PanelMenu.Button {
         if (!this._nmClient)
             return result;
 
-        const connections = this._nmClient.get_active_connections() || [];
-        for (const ac of connections) {
-            const type = ac.get_connection_type?.() || ac.connection_type || '';
-            const id = ac.get_id?.() || ac.id || type || 'connection';
-            const default4 = ac.get_default?.() || ac.default;
-            if (default4)
+        for (const ac of this._nmClient.get_active_connections()) {
+            const type = ac.get_connection_type() || '';
+            const id = ac.get_id() || type || 'connection';
+            if (ac.get_default())
                 result.primary = id;
 
-            if (type === 'vpn' || type === 'wireguard' || String(type).includes('vpn')) {
+            if (type === 'vpn' || type === 'wireguard' || type.includes('vpn')) {
                 result.vpn = true;
                 result.names.push(id);
             }
-            const low = String(id).toLowerCase();
+            const low = id.toLowerCase();
             if (low.includes('vpn') || low.includes('wireguard') || low.includes('mullvad') ||
                 low.includes('proton') || low.includes('wg-')) {
                 result.vpn = true;
@@ -257,32 +247,24 @@ class NetIdentityIndicator extends PanelMenu.Button {
                 result.vpn = true;
             }
 
-            try {
-                const ip4 = ac.get_ip4_config?.() || ac.ip4_config;
-                if (ip4) {
-                    const addrs = ip4.get_addresses?.() || [];
-                    for (const a of addrs) {
-                        const addr = a.get_address?.() || a.address;
-                        if (addr && !addr.startsWith('127.'))
-                            result.lan.push(addr);
-                    }
-                    const ns = ip4.get_nameservers?.() || ip4.nameservers || [];
-                    for (const n of ns) {
-                        if (n && !result.dns.includes(n))
-                            result.dns.push(n);
-                    }
+            const ip4 = ac.get_ip4_config();
+            if (ip4) {
+                for (const a of ip4.get_addresses()) {
+                    const addr = a.get_address();
+                    if (addr && !addr.startsWith('127.'))
+                        result.lan.push(addr);
                 }
-            } catch {
-                // skip broken connection entries
+                for (const n of ip4.get_nameservers()) {
+                    if (n && !result.dns.includes(n))
+                        result.dns.push(n);
+                }
             }
         }
 
-        const devices = this._nmClient.get_devices?.() || [];
-        for (const dev of devices) {
-            const iface = dev.get_iface?.() || dev.interface || '';
-            const state = dev.get_state?.() || dev.state;
-            if (state !== NM.DeviceState.ACTIVATED)
+        for (const dev of this._nmClient.get_devices()) {
+            if (dev.get_state() !== NM.DeviceState.ACTIVATED)
                 continue;
+            const iface = dev.get_iface() || '';
             if (iface === 'tailscale0') {
                 result.tailscale = true;
                 result.vpn = true;
@@ -292,18 +274,13 @@ class NetIdentityIndicator extends PanelMenu.Button {
                 if (!result.names.includes(iface))
                     result.names.push(iface);
             }
-            try {
-                const ip4 = dev.get_ip4_config?.() || dev.ip4_config;
-                if (ip4) {
-                    const addrs = ip4.get_addresses?.() || [];
-                    for (const a of addrs) {
-                        const addr = a.get_address?.() || a.address;
-                        if (addr && !addr.startsWith('127.') && !result.lan.includes(addr))
-                            result.lan.push(addr);
-                    }
+            const ip4 = dev.get_ip4_config();
+            if (ip4) {
+                for (const a of ip4.get_addresses()) {
+                    const addr = a.get_address();
+                    if (addr && !addr.startsWith('127.') && !result.lan.includes(addr))
+                        result.lan.push(addr);
                 }
-            } catch {
-                // ignore
             }
         }
 
@@ -458,28 +435,17 @@ class NetIdentityIndicator extends PanelMenu.Button {
 }
 
 export default class NetIdentityExtension extends Extension {
-    _addToPanel(role, indicator, position = 0, box = 'right') {
-        const existing = Main.panel.statusArea[role];
-        if (existing) {
-            try {
-                existing.destroy();
-            } catch {
-                // ignore
-            }
-            if (Main.panel.statusArea[role])
-                delete Main.panel.statusArea[role];
-        }
-        Main.panel.addToStatusArea(role, indicator, position, box);
-    }
 
     enable() {
         this._indicator = new NetIdentityIndicator();
-        this._addToPanel(this.uuid, this._indicator, 0, 'right');
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         this._indicator.start().catch(e => logError(e));
     }
 
     disable() {
-        this._indicator?.destroy();
-        this._indicator = null;
+        if (this._indicator) {
+            this._indicator.destroy();
+            this._indicator = null;
+        }
     }
 }
