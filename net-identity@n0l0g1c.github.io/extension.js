@@ -1,4 +1,3 @@
-// Net Identity — public IP, VPN, DNS, connection identity
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import Clutter from 'gi://Clutter';
@@ -18,136 +17,103 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async', 'send_and_read_finish');
 Gio._promisify(Gio.File.prototype, 'load_contents_async', 'load_contents_finish');
 
-const IP_POLL_MS = 5 * 60 * 1000;
-const LOCAL_POLL_MS = 3 * 1000;
+const IP_MS = 5 * 60 * 1000;
+const LOCAL_MS = 3000;
 const IP_URLS = [
     'https://api.ipify.org',
     'https://ifconfig.me/ip',
     'https://icanhazip.com',
 ];
-const USER_AGENT = 'net-identity@n0l0g1c.github.io/1.0';
 
-class StatusRow extends PopupMenu.PopupBaseMenuItem {
-    static {
-        GObject.registerClass(this);
-    }
+class Row extends PopupMenu.PopupBaseMenuItem {
+    static { GObject.registerClass(this); }
 
-    constructor(key, value, style = '') {
-        super({
-            reactive: true,
-            can_focus: true,
-            style_class: 'ni-row',
-        });
-
-        this._keyLabel = new St.Label({
-            text: key,
+    constructor(label) {
+        super({reactive: true, can_focus: true, style_class: 'ni-row'});
+        this.add_child(new St.Label({
+            text: label,
             y_align: Clutter.ActorAlign.CENTER,
             style_class: 'ni-key',
-        });
-        this.add_child(this._keyLabel);
-
+        }));
         this._val = new St.Label({
-            text: value,
+            text: '…',
             y_align: Clutter.ActorAlign.CENTER,
-            style_class: `ni-val ${style}`.trim(),
+            style_class: 'ni-val',
             x_expand: true,
         });
         this._val.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         this.add_child(this._val);
-
         this.connect('activate', () => {
-            const text = this._val.text;
-            if (!text || text === '…' || text === '—')
+            const t = this._val.text;
+            if (!t || t === '…' || t === '—')
                 return;
-            St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
-            Main.notify('Net Identity', `Copied: ${text}`);
+            St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, t);
+            Main.notify('Net Identity', `Copied: ${t}`);
         });
     }
 
-    setValue(text, style = '') {
+    set(text, extra = '') {
         this._val.text = text;
-        this._val.style_class = `ni-val ${style}`.trim();
+        this._val.style_class = extra ? `ni-val ${extra}` : 'ni-val';
     }
 }
 
-class NetIdentityIndicator extends PanelMenu.Button {
-    static {
-        GObject.registerClass(this);
-    }
+class Indicator extends PanelMenu.Button {
+    static { GObject.registerClass(this); }
 
     constructor() {
         super(0.5, 'Net Identity', false);
 
-        const box = new St.BoxLayout({
-            style_class: 'panel-status-menu-box',
-        });
-
-        this._panelIcon = new St.Icon({
+        const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
+        this._icon = new St.Icon({
             icon_name: 'network-workgroup-symbolic',
             style_class: 'system-status-icon',
         });
-        box.add_child(this._panelIcon);
-
-        this._panelLabel = new St.Label({
+        this._label = new St.Label({
             text: 'Net',
             y_align: Clutter.ActorAlign.CENTER,
             style_class: 'ni-panel-label',
         });
-        box.add_child(this._panelLabel);
-
+        box.add_child(this._icon);
+        box.add_child(this._label);
         this.add_child(box);
 
-        this._publicIp = '';
-        this._prevPublicIp = '';
-        this._fetchingIp = false;
-        this._nmClient = null;
-        this._nmSignalIds = [];
+        this._ip = '';
+        this._prevIp = '';
+        this._fetching = false;
+        this._nm = null;
+        this._nmIds = [];
         this._session = new Soup.Session({
             timeout: 12,
-            user_agent: USER_AGENT,
+            user_agent: 'net-identity@n0l0g1c.github.io/1.0',
         });
-        this._cancellable = null;
-        this._ipSource = 0;
-        this._localSource = 0;
-        this._menuOpenId = 0;
+        this._cancel = null;
+        this._ipTimer = 0;
+        this._localTimer = 0;
+        this._openId = 0;
 
-        this._ipRow = new StatusRow('Public IP', '…');
-        this._vpnRow = new StatusRow('VPN / WG', '…');
-        this._tailRow = new StatusRow('Tailscale', '…');
-        this._dnsRow = new StatusRow('DNS', '…');
-        this._connRow = new StatusRow('Connection', '…');
-        this._lanRow = new StatusRow('LAN IP', '…');
-
-        this.menu.addMenuItem(this._ipRow);
-        this.menu.addMenuItem(this._vpnRow);
-        this.menu.addMenuItem(this._tailRow);
-        this.menu.addMenuItem(this._dnsRow);
-        this.menu.addMenuItem(this._connRow);
-        this.menu.addMenuItem(this._lanRow);
+        this._ipRow = new Row('Public IP');
+        this._vpnRow = new Row('VPN / WG');
+        this._tailRow = new Row('Tailscale');
+        this._dnsRow = new Row('DNS');
+        this._connRow = new Row('Connection');
+        this._lanRow = new Row('LAN IP');
+        for (const r of [this._ipRow, this._vpnRow, this._tailRow,
+            this._dnsRow, this._connRow, this._lanRow])
+            this.menu.addMenuItem(r);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const refresh = new PopupMenu.PopupMenuItem('Refresh public IP');
+        refresh.connect('activate', () => this._fetchIp(true).catch(e => logError(e)));
+        this.menu.addMenuItem(refresh);
 
-        this._refreshItem = new PopupMenu.PopupMenuItem('Refresh public IP');
-        this._refreshItem.connect('activate', () => {
-            this._fetchPublicIp(true).catch(e => logError(e));
+        this._note = new PopupMenu.PopupMenuItem('Starting…', {
+            reactive: false, can_focus: false,
         });
-        this.menu.addMenuItem(this._refreshItem);
+        this._note.label.add_style_class_name('ni-status');
+        this.menu.addMenuItem(this._note);
 
-        this._statusItem = new PopupMenu.PopupMenuItem('Starting…', {
-            reactive: false,
-            can_focus: false,
-        });
-        this._statusItem.label.add_style_class_name('ni-status');
-        this.menu.addMenuItem(this._statusItem);
-
-        const hint = new PopupMenu.PopupMenuItem(
-            'Click a row to copy its value',
-            {reactive: false, can_focus: false}
-        );
-        hint.label.add_style_class_name('ni-hint');
-        this.menu.addMenuItem(hint);
-
-        this._menuOpenId = this.menu.connect('open-state-changed', (_m, open) => {
+        this._openId = this.menu.connect('open-state-changed', (_m, open) => {
             if (open)
                 this._refreshLocal().catch(e => logError(e));
         });
@@ -155,297 +121,218 @@ class NetIdentityIndicator extends PanelMenu.Button {
 
     async start() {
         try {
-            this._nmClient = await NM.Client.new_async(null);
-            this._nmSignalIds.push(
-                this._nmClient.connect('notify::active-connections', () => this._refreshLocal().catch(e => logError(e)))
-            );
-            this._nmSignalIds.push(
-                this._nmClient.connect('device-added', () => this._refreshLocal().catch(e => logError(e)))
-            );
-            this._nmSignalIds.push(
-                this._nmClient.connect('device-removed', () => this._refreshLocal().catch(e => logError(e)))
-            );
+            this._nm = await NM.Client.new_async(null);
+            this._nmIds.push(this._nm.connect(
+                'notify::active-connections',
+                () => this._refreshLocal().catch(e => logError(e))
+            ));
         } catch (e) {
-            logError(e, 'Net Identity: NetworkManager unavailable');
-            this._statusItem.label.text = 'NetworkManager unavailable';
+            logError(e, 'Net Identity: NM unavailable');
+            this._note.label.text = 'NetworkManager unavailable';
         }
 
         this._refreshLocal().catch(e => logError(e));
-        this._fetchPublicIp(false).catch(e => logError(e));
+        this._fetchIp(false).catch(e => logError(e));
 
-        this._ipSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, IP_POLL_MS, () => {
-            this._fetchPublicIp(false).catch(e => logError(e));
+        this._ipTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, IP_MS, () => {
+            this._fetchIp(false).catch(e => logError(e));
             return GLib.SOURCE_CONTINUE;
         });
-        this._localSource = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LOCAL_POLL_MS, () => {
+        this._localTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LOCAL_MS, () => {
             this._refreshLocal().catch(e => logError(e));
             return GLib.SOURCE_CONTINUE;
         });
     }
 
     destroy() {
-        if (this._menuOpenId) {
-            this.menu.disconnect(this._menuOpenId);
-            this._menuOpenId = 0;
+        if (this._openId) {
+            this.menu.disconnect(this._openId);
+            this._openId = 0;
         }
-        if (this._ipSource) {
-            GLib.Source.remove(this._ipSource);
-            this._ipSource = 0;
+        if (this._ipTimer) {
+            GLib.Source.remove(this._ipTimer);
+            this._ipTimer = 0;
         }
-        if (this._localSource) {
-            GLib.Source.remove(this._localSource);
-            this._localSource = 0;
+        if (this._localTimer) {
+            GLib.Source.remove(this._localTimer);
+            this._localTimer = 0;
         }
-        if (this._cancellable) {
-            this._cancellable.cancel();
-            this._cancellable = null;
+        if (this._cancel) {
+            this._cancel.cancel();
+            this._cancel = null;
         }
-        if (this._nmClient) {
-            for (const id of this._nmSignalIds)
-                this._nmClient.disconnect(id);
-            this._nmSignalIds = [];
+        if (this._nm) {
+            for (const id of this._nmIds)
+                this._nm.disconnect(id);
+            this._nmIds = [];
+            this._nm = null;
         }
         if (this._session) {
             this._session.abort();
             this._session = null;
         }
-        this._nmClient = null;
         super.destroy();
     }
 
-    async _collectNm() {
-        const result = {
-            vpn: false,
-            names: [],
-            tailscale: false,
-            lan: [],
-            dns: [],
-            primary: '—',
-        };
-        if (!this._nmClient)
-            return result;
-
-        for (const ac of this._nmClient.get_active_connections()) {
-            const type = ac.get_connection_type() || '';
-            const id = ac.get_id() || type || 'connection';
-            if (ac.get_default())
-                result.primary = id;
-
-            if (type === 'vpn' || type === 'wireguard' || type.includes('vpn')) {
-                result.vpn = true;
-                result.names.push(id);
-            }
-            const low = id.toLowerCase();
-            if (low.includes('vpn') || low.includes('wireguard') || low.includes('mullvad') ||
-                low.includes('proton') || low.includes('wg-')) {
-                result.vpn = true;
-                if (!result.names.includes(id))
-                    result.names.push(id);
-            }
-            if (low.includes('tailscale')) {
-                result.tailscale = true;
-                result.vpn = true;
-            }
-
-            const ip4 = ac.get_ip4_config();
-            if (ip4) {
-                for (const a of ip4.get_addresses()) {
-                    const addr = a.get_address();
-                    if (addr && !addr.startsWith('127.'))
-                        result.lan.push(addr);
-                }
-                for (const n of ip4.get_nameservers()) {
-                    if (n && !result.dns.includes(n))
-                        result.dns.push(n);
-                }
-            }
-        }
-
-        for (const dev of this._nmClient.get_devices()) {
-            if (dev.get_state() !== NM.DeviceState.ACTIVATED)
-                continue;
-            const iface = dev.get_iface() || '';
-            if (iface === 'tailscale0') {
-                result.tailscale = true;
-                result.vpn = true;
-            }
-            if (iface.startsWith('wg') || iface.startsWith('tun') || iface.startsWith('nordlynx')) {
-                result.vpn = true;
-                if (!result.names.includes(iface))
-                    result.names.push(iface);
-            }
-            const ip4 = dev.get_ip4_config();
-            if (ip4) {
-                for (const a of ip4.get_addresses()) {
-                    const addr = a.get_address();
-                    if (addr && !addr.startsWith('127.') && !result.lan.includes(addr))
-                        result.lan.push(addr);
-                }
-            }
-        }
-
-        if (result.dns.length === 0)
-            result.dns = await this._readResolvConf();
-
-        return result;
-    }
-
-    async _readResolvConf() {
-        const dns = [];
-        try {
-            const file = Gio.File.new_for_path('/etc/resolv.conf');
-            if (!file.query_exists(null))
-                return dns;
-            const [, bytes] = await file.load_contents_async(null);
-            const text = new TextDecoder().decode(bytes);
-            for (const line of text.split('\n')) {
-                const m = line.match(/^\s*nameserver\s+(\S+)/);
-                if (m && !dns.includes(m[1]))
-                    dns.push(m[1]);
-            }
-        } catch {
-            // ignore
-        }
-        return dns;
-    }
-
     async _refreshLocal() {
-        const info = await this._collectNm();
+        let vpn = false;
+        let names = [];
+        let tailscale = false;
+        let lan = [];
+        let dns = [];
+        let primary = '—';
 
-        if (info.vpn) {
-            this._vpnRow.setValue(
-                info.names.length ? info.names.join(', ') : 'active',
-                'ni-ok'
-            );
-        } else {
-            this._vpnRow.setValue('down', 'ni-warn');
+        if (this._nm) {
+            for (const ac of this._nm.get_active_connections()) {
+                const type = ac.get_connection_type() || '';
+                const id = ac.get_id() || type || 'connection';
+                if (ac.get_default())
+                    primary = id;
+                if (type === 'vpn' || type === 'wireguard' || type.includes('vpn')) {
+                    vpn = true;
+                    names.push(id);
+                }
+                if (id.toLowerCase().includes('tailscale')) {
+                    tailscale = true;
+                    vpn = true;
+                }
+                const ip4 = ac.get_ip4_config();
+                if (ip4) {
+                    for (const a of ip4.get_addresses()) {
+                        const addr = a.get_address();
+                        if (addr && !addr.startsWith('127.'))
+                            lan.push(addr);
+                    }
+                    for (const n of ip4.get_nameservers()) {
+                        if (n && !dns.includes(n))
+                            dns.push(n);
+                    }
+                }
+            }
+            for (const dev of this._nm.get_devices()) {
+                if (dev.get_state() !== NM.DeviceState.ACTIVATED)
+                    continue;
+                const iface = dev.get_iface() || '';
+                if (iface === 'tailscale0') {
+                    tailscale = true;
+                    vpn = true;
+                }
+                if (iface.startsWith('wg') || iface.startsWith('tun')) {
+                    vpn = true;
+                    if (!names.includes(iface))
+                        names.push(iface);
+                }
+            }
         }
 
-        this._tailRow.setValue(
-            info.tailscale ? 'up' : 'down',
-            info.tailscale ? 'ni-ok' : ''
-        );
+        if (!dns.length) {
+            try {
+                const file = Gio.File.new_for_path('/etc/resolv.conf');
+                if (file.query_exists(null)) {
+                    const [, bytes] = await file.load_contents_async(null);
+                    for (const line of new TextDecoder().decode(bytes).split('\n')) {
+                        const m = line.match(/^\s*nameserver\s+(\S+)/);
+                        if (m && !dns.includes(m[1]))
+                            dns.push(m[1]);
+                    }
+                }
+            } catch {
+                // leave empty
+            }
+        }
 
-        this._dnsRow.setValue(
-            info.dns.length ? info.dns.slice(0, 4).join(', ') : '—',
-            ''
-        );
-        this._connRow.setValue(info.primary || '—', '');
-        this._lanRow.setValue(
-            info.lan.length ? info.lan.slice(0, 3).join(', ') : '—',
-            ''
-        );
+        this._vpnRow.set(vpn ? (names.join(', ') || 'active') : 'down', vpn ? 'ni-ok' : 'ni-warn');
+        this._tailRow.set(tailscale ? 'up' : 'down', tailscale ? 'ni-ok' : '');
+        this._dnsRow.set(dns.length ? dns.slice(0, 4).join(', ') : '—');
+        this._connRow.set(primary);
+        this._lanRow.set(lan.length ? lan.slice(0, 3).join(', ') : '—');
 
-        this._updatePanel(info);
-    }
-
-    _updatePanel(info) {
-        const ip = this._publicIp || '…';
-        const shortIp = ip.length > 15 ? `${ip.slice(0, 12)}…` : ip;
-
-        if (!this._publicIp) {
-            this._panelLabel.text = info.vpn ? 'VPN…' : 'Net…';
-            this._panelLabel.style_class = 'ni-panel-label ni-warn';
-            this._panelIcon.icon_name = 'network-workgroup-symbolic';
+        if (!this._ip) {
+            this._label.text = vpn ? 'VPN…' : 'Net…';
+            this._label.style_class = 'ni-panel-label ni-warn';
+            this._icon.icon_name = 'network-workgroup-symbolic';
             return;
         }
-
-        if (info.vpn || info.tailscale) {
-            this._panelLabel.text = shortIp;
-            this._panelLabel.style_class = 'ni-panel-label ni-ok';
-            this._panelIcon.icon_name = 'network-vpn-symbolic';
+        const short = this._ip.length > 15 ? `${this._ip.slice(0, 12)}…` : this._ip;
+        this._label.text = short;
+        if (vpn || tailscale) {
+            this._label.style_class = 'ni-panel-label ni-ok';
+            this._icon.icon_name = 'network-vpn-symbolic';
         } else {
-            this._panelLabel.text = shortIp;
-            this._panelLabel.style_class = 'ni-panel-label ni-warn';
-            this._panelIcon.icon_name = 'network-workgroup-symbolic';
+            this._label.style_class = 'ni-panel-label ni-warn';
+            this._icon.icon_name = 'network-workgroup-symbolic';
         }
     }
 
-    async _fetchPublicIp(force) {
-        if (this._fetchingIp)
+    async _fetchIp(force) {
+        if (this._fetching)
             return;
-        this._fetchingIp = true;
-        if (this._cancellable)
-            this._cancellable.cancel();
-        this._cancellable = new Gio.Cancellable();
-
+        this._fetching = true;
+        if (this._cancel)
+            this._cancel.cancel();
+        this._cancel = new Gio.Cancellable();
         if (force)
-            this._statusItem.label.text = 'Refreshing public IP…';
+            this._note.label.text = 'Refreshing…';
 
         try {
-            const ip = await this._downloadIp(this._cancellable);
+            let lastErr = null;
+            let ip = null;
+            for (const url of IP_URLS) {
+                try {
+                    const msg = Soup.Message.new('GET', url);
+                    const bytes = await this._session.send_and_read_async(
+                        msg, GLib.PRIORITY_DEFAULT, this._cancel);
+                    if (msg.status_code < 200 || msg.status_code >= 300)
+                        throw new Error(`HTTP ${msg.status_code}`);
+                    const text = new TextDecoder().decode(bytes.get_data()).trim();
+                    if (!/^[\d.:a-fA-F]+$/.test(text) || text.length > 45)
+                        throw new Error('bad payload');
+                    ip = text;
+                    break;
+                } catch (e) {
+                    lastErr = e;
+                }
+            }
+            if (!ip)
+                throw lastErr || new Error('no IP');
             if (!this._session)
                 return;
 
-            const changed = this._prevPublicIp && this._prevPublicIp !== ip;
-            if (this._publicIp)
-                this._prevPublicIp = this._publicIp;
-            this._publicIp = ip;
-            this._ipRow.setValue(ip, 'ni-ok');
-
-            const now = GLib.DateTime.new_now_local();
-            this._statusItem.label.text = `IP updated ${now.format('%H:%M:%S')}`;
-
-            if (changed) {
+            const changed = this._prevIp && this._prevIp !== ip;
+            if (this._ip)
+                this._prevIp = this._ip;
+            this._ip = ip;
+            this._ipRow.set(ip, changed ? 'ni-danger' : 'ni-ok');
+            this._note.label.text =
+                `IP updated ${GLib.DateTime.new_now_local().format('%H:%M:%S')}`;
+            if (changed)
                 Main.notify('Net Identity', `Public IP changed: ${ip}`);
-                this._ipRow.setValue(ip, 'ni-danger');
-            }
-
-            this._refreshLocal().catch(err => logError(err));
+            this._refreshLocal().catch(e => logError(e));
         } catch (e) {
-            const cancelled = e instanceof GLib.Error &&
-                e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
-            if (cancelled || !this._session)
+            if (e instanceof GLib.Error &&
+                e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
-            logError(e, 'Net Identity: public IP fetch failed');
-            if (!this._publicIp)
-                this._ipRow.setValue('unavailable', 'ni-danger');
-            this._statusItem.label.text =
-                `IP fetch failed — ${String(e.message || e).slice(0, 40)}`;
+            if (!this._session)
+                return;
+            logError(e, 'Net Identity: IP fetch failed');
+            if (!this._ip)
+                this._ipRow.set('unavailable', 'ni-danger');
+            this._note.label.text = `IP fetch failed — ${String(e.message || e).slice(0, 40)}`;
         } finally {
-            this._fetchingIp = false;
+            this._fetching = false;
         }
-    }
-
-    async _downloadIp(cancellable) {
-        let lastError = null;
-        for (const url of IP_URLS) {
-            try {
-                const message = Soup.Message.new('GET', url);
-                if (!message)
-                    throw new Error('Invalid URL');
-                const bytes = await this._session.send_and_read_async(
-                    message,
-                    GLib.PRIORITY_DEFAULT,
-                    cancellable
-                );
-                const status = message.status_code;
-                if (status < 200 || status >= 300)
-                    throw new Error(`HTTP ${status}`);
-                const text = new TextDecoder().decode(bytes.get_data()).trim();
-                if (!/^[\d.:a-fA-F]+$/.test(text) || text.length > 45)
-                    throw new Error('Unexpected IP payload');
-                return text;
-            } catch (e) {
-                lastError = e;
-            }
-        }
-        throw lastError || new Error('All IP sources failed');
     }
 }
 
 export default class NetIdentityExtension extends Extension {
-
     enable() {
-        this._indicator = new NetIdentityIndicator();
+        this._indicator = new Indicator();
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         this._indicator.start().catch(e => logError(e));
     }
 
     disable() {
-        if (this._indicator) {
-            this._indicator.destroy();
-            this._indicator = null;
-        }
+        this._indicator.destroy();
+        this._indicator = null;
     }
 }
