@@ -50,8 +50,6 @@ Responses stay in memory for the session. Local data comes from NetworkManager a
 
 ## License
 
-[GPL-2.0-or-later](LICENSE)
+[GPL-2.0-or-later](LICENSE). Copyright © 2026 [Vassbrekke AS](https://www.vassbrekke.no). See [COPYRIGHT](COPYRIGHT).
 
-## Author
-
-[N0L0g1c](https://github.com/N0L0g1c)
+Source: https://github.com/Vassbrekke/Net-Identity
