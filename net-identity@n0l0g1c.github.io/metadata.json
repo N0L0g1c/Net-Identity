@@ -3,5 +3,5 @@
   "name": "Net Identity",
   "description": "Public IP, VPN state, DNS and LAN in the panel. Public IP is fetched from api.ipify.org / ifconfig.me / icanhazip.com. Click a row to copy. No accounts or telemetry.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "url": "https://github.com/N0L0g1c/Net-Identity"
+  "url": "https://github.com/Vassbrekke/Net-Identity"
 }
