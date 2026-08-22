@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build an extensions.gnome.org-ready zip (UUID directory contents only).
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: GPL-2.0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
